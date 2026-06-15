@@ -339,13 +339,29 @@ export async function scrapeNhsJobs(): Promise<{
 
 // ── GOV.UK Teaching Vacancies (open data CSV) ─────────────────────────
 
-const TV_KEYWORDS = [
+// API uses schema.org JobPosting format — field names confirmed from live response
+const TV_SEARCH_TERMS = [
+  "SEN teaching assistant",
+  "SEND teaching assistant",
+  "HLTA",
+  "learning mentor",
+  "EMHP",
+  "assistant psychologist",
+  "early help",
+  "mental health support worker",
+];
+
+const TV_TITLE_KEYWORDS = [
   "sen",
+  "send",
   "teaching assistant",
   "hlta",
   "learning mentor",
   "emhp",
   "mental health",
+  "assistant psychologist",
+  "early help",
+  "family support",
 ];
 
 export async function scrapeTeachingVacancies(): Promise<{
@@ -356,109 +372,113 @@ export async function scrapeTeachingVacancies(): Promise<{
   const errors: string[] = [];
   const seen = new Set<string>();
 
-  try {
-    // Teaching Vacancies public search (no auth for browsing)
-    const terms = ["SEN teaching assistant", "HLTA", "learning mentor"];
-    for (const term of terms) {
+  for (const term of TV_SEARCH_TERMS) {
+    try {
+      // Correct URL — no api. subdomain
       const url = `https://teaching-vacancies.service.gov.uk/api/v1/jobs?keyword=${encodeURIComponent(term)}&per_page=50`;
       const res = await fetch(url, {
         headers: {
           Accept: "application/json",
-          "User-Agent": "Mozilla/5.0 (compatible; JobAggregator/1.0)",
+          "User-Agent": "Mozilla/5.0 (compatible; PragyaJobTracker/1.0)",
         },
-        signal: AbortSignal.timeout(10000),
       });
 
       if (!res.ok) {
-        errors.push(`Teaching Vacancies (${term}): HTTP ${res.status}`);
+        errors.push(`TV (${term}): HTTP ${res.status}`);
         continue;
       }
 
       const data = await res.json();
-      const vacancies = data.data || data.jobs || data.vacancies || [];
+      const vacancies: Record<string, unknown>[] = data.data || [];
 
-      if (!Array.isArray(vacancies) || vacancies.length === 0) {
-        errors.push(
-          `Teaching Vacancies (${term}): 0 results (response: ${JSON.stringify(data).slice(0, 100)})`,
-        );
+      if (!vacancies.length) {
+        errors.push(`TV (${term}): 0 results`);
         continue;
       }
 
       for (const v of vacancies) {
-        const attr = v.attributes || v;
-        const link =
-          attr.url ||
-          attr.links?.self ||
-          `https://teaching-vacancies.service.gov.uk/jobs/${v.id}`;
-        if (seen.has(link)) continue;
+        // Schema.org JobPosting fields (confirmed from live API)
+        const link = (v.url as string) || "";
+        if (!link || seen.has(link)) continue;
         seen.add(link);
 
-        const title: string = attr.job_title || attr.title || "";
-        if (!TV_KEYWORDS.some((k) => title.toLowerCase().includes(k))) continue;
+        const title = (v.title as string) || "";
+        if (!TV_TITLE_KEYWORDS.some((k) => title.toLowerCase().includes(k)))
+          continue;
 
-        // TV API location: try multiple known field names
-        const loc = [
-          attr.school_name ? "" : null, // skip — goes to organisation
-          attr.town || attr.job_location_town,
-          attr.county || attr.job_location_county,
-          attr.region || attr.job_location_region,
-        ]
-          .filter(Boolean)
-          .join(", ");
+        // Location: jobLocation.address
+        const address = (v.jobLocation as Record<string, unknown>)?.address as
+          | Record<string, unknown>
+          | undefined;
+        const town = (address?.addressLocality as string) || "";
+        const region = (address?.addressRegion as string) || "";
+        const postcode = (address?.postalCode as string) || "";
+        const location = [town, region].filter(Boolean).join(", ") || "England";
 
-        // Visa sponsorship — default FALSE until API confirms otherwise.
-        // We don't know the exact field name yet (debug-tv endpoint will reveal it).
-        // Only mark true if we see an explicit positive signal.
-        const visaSponsorship = false;
-        const visaSponsorshipNote =
-          "Check listing — sponsorship status unknown";
+        // Organisation: hiringOrganization.name
+        const org =
+          ((v.hiringOrganization as Record<string, unknown>)?.name as string) ||
+          "";
 
-        // working pattern: full_time / part_time / term_time etc.
-        const workingPatterns: string[] =
-          attr.working_patterns || attr.working_pattern
-            ? [].concat(attr.working_patterns || attr.working_pattern)
-            : [];
-        const workingPattern = workingPatterns
-          .map((w: string) => w.replace(/_/g, " "))
-          .join(", ");
+        // Salary: baseSalary.value.value
+        const salaryObj = v.baseSalary as Record<string, unknown> | undefined;
+        const salaryValue = (salaryObj?.value as Record<string, unknown>)
+          ?.value as string | undefined;
 
-        // contract type: permanent / fixed_term / casual
-        const contractType = (
-          attr.contract_type ||
-          attr.employment_type ||
-          ""
-        ).replace(/_/g, " ");
+        // Dates
+        const postedDate = (v.datePosted as string) || undefined;
+        const deadline = v.validThrough
+          ? new Date(v.validThrough as string).toISOString().split("T")[0]
+          : undefined;
 
-        // key stages
-        const keyStages: string[] = attr.key_stages || [];
-        const keyStageStr = keyStages.join(", ");
+        // Working pattern: employmentType array e.g. ["FULL_TIME"]
+        const empTypes: string[] = (v.employmentType as string[]) || [];
+        const workingPattern =
+          empTypes.map((e) => e.replace(/_/g, " ").toLowerCase()).join(", ") ||
+          undefined;
+
+        // Visa sponsorship: parse from description HTML
+        // TV website shows "Visas cannot be sponsored" or "Visa sponsorship available"
+        const desc = (v.description as string) || "";
+        const descLower = desc.toLowerCase();
+        const cannotSponsor =
+          descLower.includes("visas cannot be sponsored") ||
+          descLower.includes("unable to offer visa sponsorship") ||
+          descLower.includes("cannot sponsor");
+        const canSponsor =
+          descLower.includes("visa sponsorship available") ||
+          descLower.includes("skilled worker visa") ||
+          descLower.includes("certificate of sponsorship") ||
+          descLower.includes("sponsor a visa");
+        const visaSponsorship = canSponsor && !cannotSponsor;
+        const visaSponsorshipNote = cannotSponsor
+          ? "Visas cannot be sponsored"
+          : canSponsor
+            ? "Visa sponsorship available"
+            : undefined;
 
         jobs.push({
           title,
-          organisation:
-            attr.school_name ||
-            attr.organisation_name ||
-            attr.school?.name ||
-            "",
+          organisation: org,
           sector: detectSector(title),
-          location: loc || "England",
-          salary: attr.salary || attr.pay_scale || attr.salary_range,
+          location,
+          salary: salaryValue || undefined,
           link,
           source: "GOV.UK Teaching Vacancies",
-          postedDate: attr.publish_on?.split?.("T")?.[0],
-          deadline: attr.expires_on?.split?.("T")?.[0],
+          postedDate,
+          deadline,
           visaSponsorship,
           visaSponsorshipNote,
-          contractType: contractType || undefined,
-          workingPattern: workingPattern || undefined,
-          keyStages: keyStageStr || undefined,
+          workingPattern,
+          contractType: undefined,
+          keyStages: undefined,
           status: "new",
           scrapedDate: new Date().toISOString().split("T")[0],
         });
       }
+    } catch (e) {
+      errors.push(`TV (${term}): ${String(e)}`);
     }
-  } catch (e) {
-    errors.push(`Teaching Vacancies: ${String(e)}`);
   }
 
   return { jobs, errors };
