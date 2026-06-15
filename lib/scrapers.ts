@@ -406,18 +406,12 @@ export async function scrapeTeachingVacancies(): Promise<{
           .filter(Boolean)
           .join(", ");
 
-        // Visa sponsorship — TV API has a direct boolean field
-        // visa_sponsorship_unavailable: true means NO sponsorship
-        const sponsorshipUnavailable =
-          attr.visa_sponsorship_unavailable === true ||
-          attr.visa_sponsorship === "unavailable" ||
-          attr.visa_sponsorship === false;
-        const visaSponsorship = !sponsorshipUnavailable;
-        const visaSponsorshipNote = sponsorshipUnavailable
-          ? "Visas cannot be sponsored"
-          : attr.visa_sponsorship === "sponsored"
-            ? "Visa sponsorship available"
-            : undefined;
+        // Visa sponsorship — default FALSE until API confirms otherwise.
+        // We don't know the exact field name yet (debug-tv endpoint will reveal it).
+        // Only mark true if we see an explicit positive signal.
+        const visaSponsorship = false;
+        const visaSponsorshipNote =
+          "Check listing — sponsorship status unknown";
 
         // working pattern: full_time / part_time / term_time etc.
         const workingPatterns: string[] =
