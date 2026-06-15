@@ -361,21 +361,43 @@ export default function JobsPage() {
                         {days === 0 ? "Closes today" : `${days}d left`}
                       </span>
                     )}
-                    {job.visaSponsorship && (
+                    {job.visaSponsorship ? (
                       <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-purple-100 text-purple-700">
-                        Visa Sponsorship
+                        Visa Sponsorship ✓
+                      </span>
+                    ) : job.visaSponsorshipNote ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-600">
+                        No Sponsorship
+                      </span>
+                    ) : null}
+                    {job.contractType && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 capitalize">
+                        {job.contractType}
+                      </span>
+                    )}
+                    {job.workingPattern && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 capitalize">
+                        {job.workingPattern}
                       </span>
                     )}
                   </div>
                   <p className="text-slate-600 text-sm mt-0.5">
-                    {job.organisation && `${job.organisation} · `}
+                    {job.organisation && (
+                      <span className="font-medium">{job.organisation}</span>
+                    )}
+                    {job.organisation && " · "}
                     {job.location !== "England"
                       ? job.location
                       : "Location not specified"}
                   </p>
                   <div className="flex flex-wrap gap-3 mt-1 text-xs text-slate-400">
                     <span>{job.sector}</span>
-                    {job.salary && <span>{job.salary}</span>}
+                    {job.salary && (
+                      <span className="text-slate-600 font-medium">
+                        {job.salary}
+                      </span>
+                    )}
+                    {job.keyStages && <span>Key stages: {job.keyStages}</span>}
                     {job.deadline && (
                       <span
                         className={

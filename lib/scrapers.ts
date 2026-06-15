@@ -56,9 +56,7 @@ export function detectSector(title: string): Sector {
   return "Other";
 }
 
-function parseRssItems(
-  xml: string,
-): Array<{
+function parseRssItems(xml: string): Array<{
   title: string;
   link: string;
   description: string;
@@ -389,28 +387,77 @@ export async function scrapeTeachingVacancies(): Promise<{
       for (const v of vacancies) {
         const attr = v.attributes || v;
         const link =
-          attr.url || `https://teaching-vacancies.service.gov.uk/jobs/${v.id}`;
+          attr.url ||
+          attr.links?.self ||
+          `https://teaching-vacancies.service.gov.uk/jobs/${v.id}`;
         if (seen.has(link)) continue;
         seen.add(link);
 
         const title: string = attr.job_title || attr.title || "";
         if (!TV_KEYWORDS.some((k) => title.toLowerCase().includes(k))) continue;
 
-        const loc = [attr.town, attr.county, attr.region]
+        // TV API location: try multiple known field names
+        const loc = [
+          attr.school_name ? "" : null, // skip — goes to organisation
+          attr.town || attr.job_location_town,
+          attr.county || attr.job_location_county,
+          attr.region || attr.job_location_region,
+        ]
           .filter(Boolean)
           .join(", ");
 
+        // Visa sponsorship — TV API has a direct boolean field
+        // visa_sponsorship_unavailable: true means NO sponsorship
+        const sponsorshipUnavailable =
+          attr.visa_sponsorship_unavailable === true ||
+          attr.visa_sponsorship === "unavailable" ||
+          attr.visa_sponsorship === false;
+        const visaSponsorship = !sponsorshipUnavailable;
+        const visaSponsorshipNote = sponsorshipUnavailable
+          ? "Visas cannot be sponsored"
+          : attr.visa_sponsorship === "sponsored"
+            ? "Visa sponsorship available"
+            : undefined;
+
+        // working pattern: full_time / part_time / term_time etc.
+        const workingPatterns: string[] =
+          attr.working_patterns || attr.working_pattern
+            ? [].concat(attr.working_patterns || attr.working_pattern)
+            : [];
+        const workingPattern = workingPatterns
+          .map((w: string) => w.replace(/_/g, " "))
+          .join(", ");
+
+        // contract type: permanent / fixed_term / casual
+        const contractType = (
+          attr.contract_type ||
+          attr.employment_type ||
+          ""
+        ).replace(/_/g, " ");
+
+        // key stages
+        const keyStages: string[] = attr.key_stages || [];
+        const keyStageStr = keyStages.join(", ");
+
         jobs.push({
           title,
-          organisation: attr.school_name || attr.organisation_name || "",
+          organisation:
+            attr.school_name ||
+            attr.organisation_name ||
+            attr.school?.name ||
+            "",
           sector: detectSector(title),
           location: loc || "England",
-          salary: attr.salary || attr.pay_scale,
+          salary: attr.salary || attr.pay_scale || attr.salary_range,
           link,
           source: "GOV.UK Teaching Vacancies",
           postedDate: attr.publish_on?.split?.("T")?.[0],
           deadline: attr.expires_on?.split?.("T")?.[0],
-          visaSponsorship: false,
+          visaSponsorship,
+          visaSponsorshipNote,
+          contractType: contractType || undefined,
+          workingPattern: workingPattern || undefined,
+          keyStages: keyStageStr || undefined,
           status: "new",
           scrapedDate: new Date().toISOString().split("T")[0],
         });
