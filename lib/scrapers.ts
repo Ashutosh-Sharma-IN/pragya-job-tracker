@@ -1,6 +1,5 @@
 import { Job, Sector } from "./types";
 
-// Keywords mapped to sectors
 const SECTOR_KEYWORDS: { keywords: string[]; sector: Sector }[] = [
   {
     keywords: [
@@ -8,19 +7,16 @@ const SECTOR_KEYWORDS: { keywords: string[]; sector: Sector }[] = [
       "sen ta",
       "send teaching assistant",
       "special educational needs assistant",
-      "sen support assistant",
+      "sen support",
     ],
     sector: "SEN Teaching Assistant",
   },
-  {
-    keywords: ["higher level teaching assistant", "hlta"],
-    sector: "HLTA",
-  },
+  { keywords: ["higher level teaching assistant", "hlta"], sector: "HLTA" },
   {
     keywords: [
       "educational mental health practitioner",
       "emhp",
-      "mental health support worker in schools",
+      "mental health support worker in school",
       "mhsw",
     ],
     sector: "EMHP",
@@ -33,7 +29,7 @@ const SECTOR_KEYWORDS: { keywords: string[]; sector: Sector }[] = [
     keywords: [
       "early help",
       "family support worker",
-      "early intervention",
+      "early intervention worker",
       "early years support",
     ],
     sector: "Early Help Practitioner",
@@ -52,7 +48,7 @@ const SECTOR_KEYWORDS: { keywords: string[]; sector: Sector }[] = [
   },
 ];
 
-function detectSector(title: string): Sector {
+export function detectSector(title: string): Sector {
   const lower = title.toLowerCase();
   for (const { keywords, sector } of SECTOR_KEYWORDS) {
     if (keywords.some((k) => lower.includes(k))) return sector;
@@ -60,195 +56,262 @@ function detectSector(title: string): Sector {
   return "Other";
 }
 
-function cleanSalary(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  return raw.replace(/\s+/g, " ").trim();
-}
-
-// ── Teaching Vacancies API (GOV.UK) ──────────────────────────────────
-
-const TV_SEARCH_TERMS = [
-  "SEN teaching assistant",
-  "HLTA",
-  "learning mentor",
-  "EMHP",
-];
-
-const TV_LOCATIONS = [
-  "Yorkshire",
-  "West Yorkshire",
-  "South Yorkshire",
-  "North Yorkshire",
-  "West Midlands",
-  "East Midlands",
-  "Greater Manchester",
-  "Lancashire",
-  "Merseyside",
-  "Tyne and Wear",
-  "County Durham",
-  "Nottinghamshire",
-  "Leicestershire",
-];
-
-export async function scrapeTeachingVacancies(): Promise<Omit<Job, "id">[]> {
-  const jobs: Omit<Job, "id">[] = [];
-  const seen = new Set<string>();
-
-  for (const term of TV_SEARCH_TERMS) {
-    for (const location of TV_LOCATIONS.slice(0, 5)) {
-      // limit to avoid too many requests
-      try {
-        const url = new URL(
-          "https://api.teaching-vacancies.service.gov.uk/api/v1/jobs",
-        );
-        url.searchParams.set("keyword", term);
-        url.searchParams.set("location", location);
-        url.searchParams.set("radius", "20");
-        url.searchParams.set("per_page", "50");
-
-        const res = await fetch(url.toString(), {
-          headers: {
-            Accept: "application/json",
-            "User-Agent": "PragyaJobTracker/1.0 (personal job search tool)",
-          },
-        });
-
-        if (!res.ok) continue;
-        const data = await res.json();
-        const vacancies = data.data || [];
-
-        for (const v of vacancies) {
-          const attr = v.attributes || {};
-          const link = `https://teaching-vacancies.service.gov.uk/jobs/${v.id}`;
-          if (seen.has(link)) continue;
-          seen.add(link);
-
-          const title: string = attr.job_title || attr.title || "";
-          jobs.push({
-            title,
-            organisation: attr.school_name || attr.organisation_name || "",
-            sector: detectSector(title),
-            location: [attr.town, attr.county].filter(Boolean).join(", "),
-            salary: cleanSalary(attr.salary),
-            link,
-            source: "GOV.UK Teaching Vacancies",
-            postedDate: attr.publish_on?.split("T")[0],
-            deadline: attr.expires_on?.split("T")[0],
-            visaSponsorship: false,
-            status: "new",
-            scrapedDate: new Date().toISOString().split("T")[0],
-          });
-        }
-      } catch {
-        // silently skip failed term+location combos
-      }
-    }
-  }
-
-  return jobs;
-}
-
-// ── NHS Jobs RSS ──────────────────────────────────────────────────────
-
-const NHS_SEARCH_TERMS = [
-  "EMHP",
-  "Educational Mental Health",
-  "Assistant Psychologist",
-  "Mental Health Support Worker",
-  "Early Help",
-  "Learning Mentor",
-];
-
-function parseRssItem(
-  item: string,
-): {
+function parseRssItems(
+  xml: string,
+): Array<{
   title: string;
   link: string;
   description: string;
   pubDate: string;
-} | null {
-  const get = (tag: string) => {
-    const m = item.match(
-      new RegExp(
-        `<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${tag}>|<${tag}[^>]*>([\\s\\S]*?)</${tag}>`,
-        "i",
-      ),
-    );
-    return m ? (m[1] || m[2] || "").trim() : "";
-  };
-  const title = get("title");
-  const link = get("link") || get("guid");
-  if (!title || !link) return null;
-  return {
-    title,
-    link,
-    description: get("description"),
-    pubDate: get("pubDate"),
-  };
+}> {
+  const items: Array<{
+    title: string;
+    link: string;
+    description: string;
+    pubDate: string;
+  }> = [];
+  const parts = xml.split(/<item[\s>]/i).slice(1);
+
+  for (const part of parts) {
+    const get = (tag: string) => {
+      const m =
+        part.match(
+          new RegExp(
+            `<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${tag}>`,
+            "i",
+          ),
+        ) || part.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+      return m ? m[1].trim() : "";
+    };
+    const title = get("title");
+    const link = get("link") || get("guid");
+    if (title && link) {
+      items.push({
+        title,
+        link,
+        description: get("description"),
+        pubDate: get("pubDate"),
+      });
+    }
+  }
+  return items;
 }
 
-export async function scrapeNhsJobs(): Promise<Omit<Job, "id">[]> {
+const LOW_COST_AREAS = [
+  "yorkshire",
+  "leeds",
+  "sheffield",
+  "bradford",
+  "hull",
+  "york",
+  "halifax",
+  "west midlands",
+  "birmingham",
+  "coventry",
+  "wolverhampton",
+  "walsall",
+  "dudley",
+  "east midlands",
+  "nottingham",
+  "leicester",
+  "derby",
+  "lincoln",
+  "mansfield",
+  "manchester",
+  "salford",
+  "oldham",
+  "bolton",
+  "rochdale",
+  "wigan",
+  "stockport",
+  "lancashire",
+  "preston",
+  "blackburn",
+  "burnley",
+  "blackpool",
+  "merseyside",
+  "liverpool",
+  "sefton",
+  "knowsley",
+  "newcastle",
+  "sunderland",
+  "gateshead",
+  "middlesbrough",
+  "durham",
+  "north east",
+  "tyne",
+  "wear",
+];
+
+function isLowCostArea(location: string): boolean {
+  const lower = location.toLowerCase();
+  return LOW_COST_AREAS.some((a) => lower.includes(a));
+}
+
+// ── Indeed UK RSS (most reliable, no auth needed) ─────────────────────
+
+const INDEED_SEARCHES = [
+  { q: "SEN Teaching Assistant", sector: "SEN Teaching Assistant" as Sector },
+  { q: "HLTA Special Educational Needs", sector: "HLTA" as Sector },
+  {
+    q: "EMHP Educational Mental Health Practitioner",
+    sector: "EMHP" as Sector,
+  },
+  { q: "Assistant Psychologist", sector: "Assistant Psychologist" as Sector },
+  {
+    q: "Early Help Practitioner Family Support",
+    sector: "Early Help Practitioner" as Sector,
+  },
+  { q: "Learning Mentor school", sector: "Learning Mentor" as Sector },
+  {
+    q: "Mental Health Support Worker school",
+    sector: "Mental Health Support Worker" as Sector,
+  },
+];
+
+export async function scrapeIndeed(): Promise<{
+  jobs: Omit<Job, "id">[];
+  errors: string[];
+}> {
   const jobs: Omit<Job, "id">[] = [];
+  const errors: string[] = [];
   const seen = new Set<string>();
 
-  for (const term of NHS_SEARCH_TERMS) {
+  for (const { q, sector } of INDEED_SEARCHES) {
     try {
-      const url = `https://www.jobs.nhs.uk/xi/search_vacancy/rss/?action=search&keyword=${encodeURIComponent(term)}&location=England&distance=50`;
+      const url = `https://uk.indeed.com/rss?q=${encodeURIComponent(q)}&l=England&sort=date&radius=40`;
       const res = await fetch(url, {
         headers: {
-          "User-Agent": "PragyaJobTracker/1.0 (personal job search tool)",
+          "User-Agent": "Mozilla/5.0 (compatible; JobAggregator/1.0)",
+          Accept: "application/rss+xml, application/xml, text/xml",
         },
+        signal: AbortSignal.timeout(10000),
       });
-      if (!res.ok) continue;
+
+      if (!res.ok) {
+        errors.push(`Indeed (${q}): HTTP ${res.status}`);
+        continue;
+      }
+
       const xml = await res.text();
+      if (!xml.includes("<item")) {
+        errors.push(`Indeed (${q}): no items in response`);
+        continue;
+      }
 
-      const items = xml.split("<item>").slice(1);
-      for (const item of items) {
-        const parsed = parseRssItem(item);
-        if (!parsed || seen.has(parsed.link)) continue;
-        seen.add(parsed.link);
+      const items = parseRssItems(xml);
+      for (const { title, link, description, pubDate } of items) {
+        if (seen.has(link)) continue;
+        seen.add(link);
 
-        const { title, link, description, pubDate } = parsed;
-
-        // extract location from description
-        const locMatch = description.match(/Location:\s*([^\n<]+)/i);
+        // extract location from description or title
+        const locMatch = description.match(/(?:location|loc)[:\s]+([^<\n,]+)/i);
         const location = locMatch ? locMatch[1].trim() : "England";
 
-        // extract salary from description
-        const salMatch = description.match(/Salary:\s*([^\n<]+)/i);
-        const salary = salMatch ? salMatch[1].trim() : undefined;
+        const salMatch = description.match(
+          /£[\d,]+(?:\s*[-–]\s*£[\d,]+)?(?:\s*(?:per|a|\/)\s*(?:year|annum|hour|pa))?/i,
+        );
+        const salary = salMatch ? salMatch[0] : undefined;
 
-        // rough filter — skip roles clearly outside lower-cost areas
-        const lowCostAreas = [
-          "yorkshire",
-          "midlands",
-          "manchester",
-          "lancashire",
-          "merseyside",
-          "newcastle",
-          "sunderland",
-          "durham",
-          "nottingham",
-          "leicester",
-          "derby",
-          "sheffield",
-          "leeds",
-          "bradford",
-          "liverpool",
-          "coventry",
-          "wolverhampton",
-        ];
-        const locationLower = location.toLowerCase();
-        if (!lowCostAreas.some((a) => locationLower.includes(a))) continue;
-
-        const sponsorshipKeywords = [
-          "tier 2",
+        const sponsorKeywords = [
           "skilled worker",
           "visa sponsor",
           "certificate of sponsorship",
-          "cos",
+          "cos provided",
+          "tier 2",
         ];
-        const visaSponsorship = sponsorshipKeywords.some((k) =>
+        const visaSponsorship = sponsorKeywords.some((k) =>
+          description.toLowerCase().includes(k),
+        );
+
+        jobs.push({
+          title,
+          organisation: "",
+          sector:
+            detectSector(title) !== "Other" ? detectSector(title) : sector,
+          location,
+          salary,
+          link,
+          source: "Indeed UK",
+          postedDate: pubDate
+            ? new Date(pubDate).toISOString().split("T")[0]
+            : undefined,
+          visaSponsorship,
+          status: "new",
+          scrapedDate: new Date().toISOString().split("T")[0],
+        });
+      }
+    } catch (e) {
+      errors.push(`Indeed (${q}): ${String(e)}`);
+    }
+  }
+
+  return { jobs, errors };
+}
+
+// ── NHS Jobs RSS ───────────────────────────────────────────────────────
+
+const NHS_TERMS = [
+  "EMHP",
+  "assistant psychologist",
+  "mental health support worker",
+  "early help",
+  "learning mentor",
+];
+
+export async function scrapeNhsJobs(): Promise<{
+  jobs: Omit<Job, "id">[];
+  errors: string[];
+}> {
+  const jobs: Omit<Job, "id">[] = [];
+  const errors: string[] = [];
+  const seen = new Set<string>();
+
+  for (const term of NHS_TERMS) {
+    try {
+      // NHS Jobs updated URL format
+      const url = `https://www.jobs.nhs.uk/cgi-bin/search.cgi?what=${encodeURIComponent(term)}&where=England&distance=200&format=rss`;
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; JobAggregator/1.0)",
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!res.ok) {
+        errors.push(`NHS Jobs (${term}): HTTP ${res.status}`);
+        continue;
+      }
+
+      const xml = await res.text();
+      if (!xml.includes("<item")) {
+        errors.push(`NHS Jobs (${term}): no items in feed`);
+        continue;
+      }
+
+      const items = parseRssItems(xml);
+      for (const { title, link, description, pubDate } of items) {
+        if (seen.has(link)) continue;
+        seen.add(link);
+
+        const locMatch = description.match(
+          /(?:location|base)[:\s]+([^\n<,]+)/i,
+        );
+        const location = locMatch ? locMatch[1].trim() : "England";
+
+        if (!isLowCostArea(location)) continue;
+
+        const salMatch = description.match(/(?:salary|band)[:\s]+([^\n<]+)/i);
+        const salary = salMatch ? salMatch[1].trim() : undefined;
+
+        const sponsorKeywords = [
+          "skilled worker",
+          "visa",
+          "certificate of sponsorship",
+          "cos",
+          "tier 2",
+        ];
+        const visaSponsorship = sponsorKeywords.some((k) =>
           description.toLowerCase().includes(k),
         );
 
@@ -257,7 +320,7 @@ export async function scrapeNhsJobs(): Promise<Omit<Job, "id">[]> {
           organisation: "",
           sector: detectSector(title),
           location,
-          salary: cleanSalary(salary),
+          salary,
           link,
           source: "NHS Jobs",
           postedDate: pubDate
@@ -268,72 +331,94 @@ export async function scrapeNhsJobs(): Promise<Omit<Job, "id">[]> {
           scrapedDate: new Date().toISOString().split("T")[0],
         });
       }
-    } catch {
-      // skip failed terms
+    } catch (e) {
+      errors.push(`NHS Jobs (${term}): ${String(e)}`);
     }
   }
 
-  return jobs;
+  return { jobs, errors };
 }
 
-// ── CharityJob RSS ────────────────────────────────────────────────────
+// ── GOV.UK Teaching Vacancies (open data CSV) ─────────────────────────
 
-const CHARITY_SEARCH_TERMS = [
-  "mental health support worker",
-  "early help worker",
-  "assistant psychologist",
+const TV_KEYWORDS = [
+  "sen",
+  "teaching assistant",
+  "hlta",
   "learning mentor",
+  "emhp",
+  "mental health",
 ];
 
-export async function scrapeCharityJob(): Promise<Omit<Job, "id">[]> {
+export async function scrapeTeachingVacancies(): Promise<{
+  jobs: Omit<Job, "id">[];
+  errors: string[];
+}> {
   const jobs: Omit<Job, "id">[] = [];
+  const errors: string[] = [];
   const seen = new Set<string>();
 
-  for (const term of CHARITY_SEARCH_TERMS) {
-    try {
-      const url = `https://www.charityjob.co.uk/jobs?keywords=${encodeURIComponent(term)}&location=England&format=rss`;
+  try {
+    // Teaching Vacancies public search (no auth for browsing)
+    const terms = ["SEN teaching assistant", "HLTA", "learning mentor"];
+    for (const term of terms) {
+      const url = `https://teaching-vacancies.service.gov.uk/api/v1/jobs?keyword=${encodeURIComponent(term)}&per_page=50`;
       const res = await fetch(url, {
         headers: {
-          "User-Agent": "PragyaJobTracker/1.0 (personal job search tool)",
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0 (compatible; JobAggregator/1.0)",
         },
+        signal: AbortSignal.timeout(10000),
       });
-      if (!res.ok) continue;
-      const xml = await res.text();
 
-      const items = xml.split("<item>").slice(1);
-      for (const item of items) {
-        const parsed = parseRssItem(item);
-        if (!parsed || seen.has(parsed.link)) continue;
-        seen.add(parsed.link);
+      if (!res.ok) {
+        errors.push(`Teaching Vacancies (${term}): HTTP ${res.status}`);
+        continue;
+      }
 
-        const { title, link, description, pubDate } = parsed;
+      const data = await res.json();
+      const vacancies = data.data || data.jobs || data.vacancies || [];
 
-        const locMatch = description.match(/Location:\s*([^\n<,]+)/i);
-        const location = locMatch ? locMatch[1].trim() : "England";
+      if (!Array.isArray(vacancies) || vacancies.length === 0) {
+        errors.push(
+          `Teaching Vacancies (${term}): 0 results (response: ${JSON.stringify(data).slice(0, 100)})`,
+        );
+        continue;
+      }
 
-        const salMatch = description.match(/Salary:\s*([^\n<]+)/i);
-        const salary = salMatch ? salMatch[1].trim() : undefined;
+      for (const v of vacancies) {
+        const attr = v.attributes || v;
+        const link =
+          attr.url || `https://teaching-vacancies.service.gov.uk/jobs/${v.id}`;
+        if (seen.has(link)) continue;
+        seen.add(link);
+
+        const title: string = attr.job_title || attr.title || "";
+        if (!TV_KEYWORDS.some((k) => title.toLowerCase().includes(k))) continue;
+
+        const loc = [attr.town, attr.county, attr.region]
+          .filter(Boolean)
+          .join(", ");
 
         jobs.push({
           title,
-          organisation: "",
+          organisation: attr.school_name || attr.organisation_name || "",
           sector: detectSector(title),
-          location,
-          salary: cleanSalary(salary),
+          location: loc || "England",
+          salary: attr.salary || attr.pay_scale,
           link,
-          source: "CharityJob",
-          postedDate: pubDate
-            ? new Date(pubDate).toISOString().split("T")[0]
-            : undefined,
+          source: "GOV.UK Teaching Vacancies",
+          postedDate: attr.publish_on?.split?.("T")?.[0],
+          deadline: attr.expires_on?.split?.("T")?.[0],
           visaSponsorship: false,
           status: "new",
           scrapedDate: new Date().toISOString().split("T")[0],
         });
       }
-    } catch {
-      // skip
     }
+  } catch (e) {
+    errors.push(`Teaching Vacancies: ${String(e)}`);
   }
 
-  return jobs;
+  return { jobs, errors };
 }

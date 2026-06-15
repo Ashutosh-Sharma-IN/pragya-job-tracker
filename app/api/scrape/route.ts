@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import {
-  scrapeTeachingVacancies,
+  scrapeIndeed,
   scrapeNhsJobs,
-  scrapeCharityJob,
+  scrapeTeachingVacancies,
 } from "@/lib/scrapers";
 import { getJobs, createJob } from "@/lib/airtable";
 
@@ -10,24 +10,51 @@ export const maxDuration = 60;
 
 export async function POST() {
   try {
-    // fetch existing job links to deduplicate
     const existing = await getJobs();
     const existingLinks = new Set(existing.map((j) => j.link));
 
-    // run all scrapers in parallel
-    const [tvJobs, nhsJobs, charityJobs] = await Promise.allSettled([
-      scrapeTeachingVacancies(),
+    const [indeedResult, nhsResult, tvResult] = await Promise.allSettled([
+      scrapeIndeed(),
       scrapeNhsJobs(),
-      scrapeCharityJob(),
+      scrapeTeachingVacancies(),
     ]);
 
+    const sources = {
+      indeed:
+        indeedResult.status === "fulfilled"
+          ? {
+              found: indeedResult.value.jobs.length,
+              errors: indeedResult.value.errors,
+            }
+          : {
+              found: 0,
+              errors: [String((indeedResult as PromiseRejectedResult).reason)],
+            },
+      nhsJobs:
+        nhsResult.status === "fulfilled"
+          ? {
+              found: nhsResult.value.jobs.length,
+              errors: nhsResult.value.errors,
+            }
+          : {
+              found: 0,
+              errors: [String((nhsResult as PromiseRejectedResult).reason)],
+            },
+      teachingVacancies:
+        tvResult.status === "fulfilled"
+          ? { found: tvResult.value.jobs.length, errors: tvResult.value.errors }
+          : {
+              found: 0,
+              errors: [String((tvResult as PromiseRejectedResult).reason)],
+            },
+    };
+
     const allJobs = [
-      ...(tvJobs.status === "fulfilled" ? tvJobs.value : []),
-      ...(nhsJobs.status === "fulfilled" ? nhsJobs.value : []),
-      ...(charityJobs.status === "fulfilled" ? charityJobs.value : []),
+      ...(indeedResult.status === "fulfilled" ? indeedResult.value.jobs : []),
+      ...(nhsResult.status === "fulfilled" ? nhsResult.value.jobs : []),
+      ...(tvResult.status === "fulfilled" ? tvResult.value.jobs : []),
     ];
 
-    // deduplicate within this batch and against existing
     const seen = new Set<string>();
     const newJobs = allJobs.filter((j) => {
       if (!j.link || seen.has(j.link) || existingLinks.has(j.link))
@@ -36,40 +63,31 @@ export async function POST() {
       return true;
     });
 
-    // push to Airtable one by one (rate limit safe)
     let added = 0;
+    const addErrors: string[] = [];
     for (const job of newJobs) {
       try {
         await createJob(job);
         added++;
-        // stay well under Airtable's 5 req/sec limit
         await new Promise((r) => setTimeout(r, 250));
-      } catch {
-        // skip individual failures
+      } catch (e) {
+        addErrors.push(String(e));
       }
     }
 
     return NextResponse.json({
       ok: true,
       found: allJobs.length,
+      newAfterDedup: newJobs.length,
       added,
-      sources: {
-        teachingVacancies:
-          tvJobs.status === "fulfilled" ? tvJobs.value.length : "error",
-        nhsJobs:
-          nhsJobs.status === "fulfilled" ? nhsJobs.value.length : "error",
-        charityJob:
-          charityJobs.status === "fulfilled"
-            ? charityJobs.value.length
-            : "error",
-      },
+      sources,
+      addErrors: addErrors.slice(0, 3),
     });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });
   }
 }
 
-// Vercel Cron calls GET
 export async function GET() {
   return POST();
 }
