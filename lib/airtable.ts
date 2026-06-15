@@ -87,6 +87,7 @@ export async function getJobs(): Promise<Job[]> {
 
 export async function createJob(job: Omit<Job, "id">): Promise<Job> {
   const data = await airtableFetch(JOBS_TABLE, "POST", {
+    typecast: true,
     fields: {
       Title: job.title,
       Organisation: job.organisation,
@@ -150,6 +151,7 @@ export async function createApplication(
   app: Omit<Application, "id">,
 ): Promise<Application> {
   const data = await airtableFetch(APPLICATIONS_TABLE, "POST", {
+    typecast: true,
     fields: {
       JobId: app.jobId,
       JobTitle: app.jobTitle,
