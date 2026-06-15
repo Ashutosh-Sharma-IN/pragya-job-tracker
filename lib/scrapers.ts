@@ -337,34 +337,28 @@ export async function scrapeNhsJobs(): Promise<{
   return { jobs, errors };
 }
 
-// ── GOV.UK Teaching Vacancies (open data CSV) ─────────────────────────
+// ── GOV.UK Teaching Vacancies ─────────────────────────────────────────
 
 // API uses schema.org JobPosting format — field names confirmed from live response
-const TV_SEARCH_TERMS = [
-  "SEN teaching assistant",
-  "SEND teaching assistant",
-  "HLTA",
-  "learning mentor",
-  "EMHP",
-  "assistant psychologist",
-  "early help",
-  "mental health support worker",
+export const TV_SEARCH_TERMS: { label: string; term: string }[] = [
+  { label: "SEN Teaching Assistant", term: "SEN teaching assistant" },
+  { label: "SEND Teaching Assistant", term: "SEND teaching assistant" },
+  { label: "HLTA", term: "HLTA" },
+  { label: "Learning Mentor", term: "learning mentor" },
+  { label: "EMHP", term: "EMHP" },
+  { label: "Assistant Psychologist", term: "assistant psychologist" },
+  { label: "Early Help", term: "early help" },
+  {
+    label: "Mental Health Support Worker",
+    term: "mental health support worker",
+  },
+  { label: "Pastoral Support", term: "pastoral support worker" },
+  { label: "Family Support Worker", term: "family support worker" },
 ];
 
-const TV_TITLE_KEYWORDS = [
-  "sen",
-  "send",
-  "teaching assistant",
-  "hlta",
-  "learning mentor",
-  "emhp",
-  "mental health",
-  "assistant psychologist",
-  "early help",
-  "family support",
-];
-
-export async function scrapeTeachingVacancies(): Promise<{
+export async function scrapeTeachingVacancies(
+  selectedTerms?: string[], // array of term strings; undefined = all
+): Promise<{
   jobs: Omit<Job, "id">[];
   errors: string[];
 }> {
@@ -372,112 +366,120 @@ export async function scrapeTeachingVacancies(): Promise<{
   const errors: string[] = [];
   const seen = new Set<string>();
 
-  for (const term of TV_SEARCH_TERMS) {
-    try {
-      // Correct URL — no api. subdomain
-      const url = `https://teaching-vacancies.service.gov.uk/api/v1/jobs?keyword=${encodeURIComponent(term)}&per_page=50`;
-      const res = await fetch(url, {
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0 (compatible; PragyaJobTracker/1.0)",
-        },
-      });
+  const termsToUse = selectedTerms
+    ? TV_SEARCH_TERMS.filter((t) => selectedTerms.includes(t.term))
+    : TV_SEARCH_TERMS;
 
-      if (!res.ok) {
-        errors.push(`TV (${term}): HTTP ${res.status}`);
-        continue;
-      }
+  for (const { term } of termsToUse) {
+    // Fetch up to 2 pages (100 results) per term
+    for (let page = 1; page <= 2; page++) {
+      try {
+        const url = `https://teaching-vacancies.service.gov.uk/api/v1/jobs?keyword=${encodeURIComponent(term)}&per_page=50&page=${page}`;
+        const res = await fetch(url, {
+          headers: {
+            Accept: "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; PragyaJobTracker/1.0)",
+          },
+        });
 
-      const data = await res.json();
-      const vacancies: Record<string, unknown>[] = data.data || [];
+        if (!res.ok) {
+          errors.push(`TV (${term} p${page}): HTTP ${res.status}`);
+          break;
+        }
 
-      if (!vacancies.length) {
-        errors.push(`TV (${term}): 0 results`);
-        continue;
-      }
+        const data = await res.json();
+        const vacancies: Record<string, unknown>[] = data.data || [];
 
-      for (const v of vacancies) {
-        // Schema.org JobPosting fields (confirmed from live API)
-        const link = (v.url as string) || "";
-        if (!link || seen.has(link)) continue;
-        seen.add(link);
+        if (!vacancies.length) break; // no more pages
 
-        const title = (v.title as string) || "";
-        if (!TV_TITLE_KEYWORDS.some((k) => title.toLowerCase().includes(k)))
-          continue;
+        for (const v of vacancies) {
+          // Schema.org JobPosting fields (confirmed from live API)
+          const link = (v.url as string) || "";
+          if (!link || seen.has(link)) continue;
+          seen.add(link);
 
-        // Location: jobLocation.address
-        const address = (v.jobLocation as Record<string, unknown>)?.address as
-          | Record<string, unknown>
-          | undefined;
-        const town = (address?.addressLocality as string) || "";
-        const region = (address?.addressRegion as string) || "";
-        const postcode = (address?.postalCode as string) || "";
-        const location = [town, region].filter(Boolean).join(", ") || "England";
+          const title = (v.title as string) || "";
+          // No title filter — the API keyword search already matched these jobs
 
-        // Organisation: hiringOrganization.name
-        const org =
-          ((v.hiringOrganization as Record<string, unknown>)?.name as string) ||
-          "";
+          // Location: jobLocation.address
+          const address = (v.jobLocation as Record<string, unknown>)
+            ?.address as Record<string, unknown> | undefined;
+          const town = (address?.addressLocality as string) || "";
+          const region = (address?.addressRegion as string) || "";
+          const postcode = (address?.postalCode as string) || "";
+          const location =
+            [town, region].filter(Boolean).join(", ") || "England";
 
-        // Salary: baseSalary.value.value
-        const salaryObj = v.baseSalary as Record<string, unknown> | undefined;
-        const salaryValue = (salaryObj?.value as Record<string, unknown>)
-          ?.value as string | undefined;
+          // Organisation: hiringOrganization.name
+          const org =
+            ((v.hiringOrganization as Record<string, unknown>)
+              ?.name as string) || "";
 
-        // Dates
-        const postedDate = (v.datePosted as string) || undefined;
-        const deadline = v.validThrough
-          ? new Date(v.validThrough as string).toISOString().split("T")[0]
-          : undefined;
+          // Salary: baseSalary.value.value
+          const salaryObj = v.baseSalary as Record<string, unknown> | undefined;
+          const salaryValue = (salaryObj?.value as Record<string, unknown>)
+            ?.value as string | undefined;
 
-        // Working pattern: employmentType array e.g. ["FULL_TIME"]
-        const empTypes: string[] = (v.employmentType as string[]) || [];
-        const workingPattern =
-          empTypes.map((e) => e.replace(/_/g, " ").toLowerCase()).join(", ") ||
-          undefined;
-
-        // Visa sponsorship: parse from description HTML
-        // TV website shows "Visas cannot be sponsored" or "Visa sponsorship available"
-        const desc = (v.description as string) || "";
-        const descLower = desc.toLowerCase();
-        const cannotSponsor =
-          descLower.includes("visas cannot be sponsored") ||
-          descLower.includes("unable to offer visa sponsorship") ||
-          descLower.includes("cannot sponsor");
-        const canSponsor =
-          descLower.includes("visa sponsorship available") ||
-          descLower.includes("skilled worker visa") ||
-          descLower.includes("certificate of sponsorship") ||
-          descLower.includes("sponsor a visa");
-        const visaSponsorship = canSponsor && !cannotSponsor;
-        const visaSponsorshipNote = cannotSponsor
-          ? "Visas cannot be sponsored"
-          : canSponsor
-            ? "Visa sponsorship available"
+          // Dates
+          const postedDate = (v.datePosted as string) || undefined;
+          const deadline = v.validThrough
+            ? new Date(v.validThrough as string).toISOString().split("T")[0]
             : undefined;
 
-        jobs.push({
-          title,
-          organisation: org,
-          sector: detectSector(title),
-          location,
-          salary: salaryValue || undefined,
-          link,
-          source: "GOV.UK Teaching Vacancies",
-          postedDate,
-          deadline,
-          visaSponsorship,
-          visaSponsorshipNote,
-          workingPattern,
-          contractType: undefined,
-          keyStages: undefined,
-          status: "new",
-          scrapedDate: new Date().toISOString().split("T")[0],
-        });
+          // Working pattern: employmentType array e.g. ["FULL_TIME"]
+          const empTypes: string[] = (v.employmentType as string[]) || [];
+          const workingPattern =
+            empTypes
+              .map((e) => e.replace(/_/g, " ").toLowerCase())
+              .join(", ") || undefined;
+
+          // Visa sponsorship: parse from description HTML
+          // TV website shows "Visas cannot be sponsored" or "Visa sponsorship available"
+          const desc = (v.description as string) || "";
+          const descLower = desc.toLowerCase();
+          const cannotSponsor =
+            descLower.includes("visas cannot be sponsored") ||
+            descLower.includes("unable to offer visa sponsorship") ||
+            descLower.includes("cannot sponsor");
+          const canSponsor =
+            descLower.includes("visa sponsorship available") ||
+            descLower.includes("skilled worker visa") ||
+            descLower.includes("certificate of sponsorship") ||
+            descLower.includes("sponsor a visa");
+          const visaSponsorship = canSponsor && !cannotSponsor;
+          const visaSponsorshipNote = cannotSponsor
+            ? "Visas cannot be sponsored"
+            : canSponsor
+              ? "Visa sponsorship available"
+              : undefined;
+
+          jobs.push({
+            title,
+            organisation: org,
+            sector: detectSector(title),
+            location,
+            salary: salaryValue || undefined,
+            link,
+            source: "GOV.UK Teaching Vacancies",
+            postedDate,
+            deadline,
+            visaSponsorship,
+            visaSponsorshipNote,
+            workingPattern,
+            contractType: undefined,
+            keyStages: undefined,
+            status: "new",
+            scrapedDate: new Date().toISOString().split("T")[0],
+          });
+        }
+
+        // Small delay between page fetches
+        if (page === 1 && vacancies.length === 50)
+          await new Promise((r) => setTimeout(r, 300));
+      } catch (e) {
+        errors.push(`TV (${term} p${page}): ${String(e)}`);
+        break;
       }
-    } catch (e) {
-      errors.push(`TV (${term}): ${String(e)}`);
     }
   }
 

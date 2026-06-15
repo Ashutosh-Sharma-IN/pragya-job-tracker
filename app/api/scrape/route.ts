@@ -8,15 +8,26 @@ import { getJobs, createJob } from "@/lib/airtable";
 
 export const maxDuration = 60;
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    // Optional: comma-separated list of TV search terms to use
+    let selectedTerms: string[] | undefined;
+    try {
+      const body = await request.json();
+      if (Array.isArray(body.terms) && body.terms.length > 0) {
+        selectedTerms = body.terms as string[];
+      }
+    } catch {
+      // no body or not JSON — use all terms
+    }
+
     const existing = await getJobs();
     const existingLinks = new Set(existing.map((j) => j.link));
 
     const [indeedResult, nhsResult, tvResult] = await Promise.allSettled([
       scrapeIndeed(),
       scrapeNhsJobs(),
-      scrapeTeachingVacancies(),
+      scrapeTeachingVacancies(selectedTerms),
     ]);
 
     const sources = {

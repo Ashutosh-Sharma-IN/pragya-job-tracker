@@ -10,6 +10,7 @@ import {
   Cell,
 } from "recharts";
 import { Job, Application } from "@/lib/types";
+import { TV_SEARCH_TERMS } from "@/lib/scrapers";
 import {
   Briefcase,
   ClipboardList,
@@ -17,6 +18,7 @@ import {
   CalendarClock,
   AlertCircle,
   RefreshCw,
+  Settings,
 } from "lucide-react";
 
 const SECTOR_COLORS: Record<string, string> = {
@@ -54,12 +56,16 @@ function StatCard({
   );
 }
 
+const ALL_TERMS = TV_SEARCH_TERMS.map((t) => t.term);
+
 export default function DashboardPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [apps, setApps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
   const [scraping, setScraping] = useState(false);
   const [scrapeResult, setScrapeResult] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [selectedTerms, setSelectedTerms] = useState<string[]>(ALL_TERMS);
 
   const loadData = useCallback(async () => {
     const [j, a] = await Promise.all([
@@ -78,11 +84,19 @@ export default function DashboardPage() {
     setScraping(true);
     setScrapeResult(null);
     try {
-      const res = await fetch("/api/scrape", { method: "POST" });
+      const res = await fetch("/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ terms: selectedTerms }),
+      });
       const data = await res.json();
       if (data.ok) {
+        const errorSummary =
+          data.addErrors?.length > 0
+            ? ` (${data.addErrors.length} write errors)`
+            : "";
         setScrapeResult(
-          `Done — ${data.added} new jobs added (${data.found} found across all sources)`,
+          `Done — ${data.added} new jobs added (${data.found} found)${errorSummary}`,
         );
         await loadData();
       } else {
@@ -92,6 +106,12 @@ export default function DashboardPage() {
       setScrapeResult("Scraper failed — check Vercel logs");
     }
     setScraping(false);
+  };
+
+  const toggleTerm = (term: string) => {
+    setSelectedTerms((prev) =>
+      prev.includes(term) ? prev.filter((t) => t !== term) : [...prev, term],
+    );
   };
 
   const totalJobs = jobs.length;
@@ -154,19 +174,61 @@ export default function DashboardPage() {
             Pragya&apos;s UK job hunt — at a glance
           </p>
         </div>
-        <div className="flex flex-col items-end gap-1">
-          <button
-            onClick={runScraper}
-            disabled={scraping}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
-          >
-            <RefreshCw size={15} className={scraping ? "animate-spin" : ""} />
-            {scraping ? "Scraping jobs…" : "Scrape New Jobs"}
-          </button>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSettings((s) => !s)}
+              className="flex items-center gap-1.5 border border-slate-200 text-slate-500 hover:bg-slate-50 text-sm px-3 py-2 rounded-lg transition-colors"
+              title="Configure which roles to search"
+            >
+              <Settings size={14} />
+              {selectedTerms.length}/{ALL_TERMS.length} roles
+            </button>
+            <button
+              onClick={runScraper}
+              disabled={scraping || selectedTerms.length === 0}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+            >
+              <RefreshCw size={15} className={scraping ? "animate-spin" : ""} />
+              {scraping ? "Scraping…" : "Scrape New Jobs"}
+            </button>
+          </div>
           {scrapeResult && (
             <p className="text-xs text-slate-500 max-w-xs text-right">
               {scrapeResult}
             </p>
+          )}
+          {showSettings && (
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-lg w-72">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-sm font-semibold text-slate-700">
+                  Roles to search
+                </p>
+                <div className="flex gap-2 text-xs text-indigo-600">
+                  <button onClick={() => setSelectedTerms(ALL_TERMS)}>
+                    All
+                  </button>
+                  <span className="text-slate-300">|</span>
+                  <button onClick={() => setSelectedTerms([])}>None</button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {TV_SEARCH_TERMS.map(({ label, term }) => (
+                  <label
+                    key={term}
+                    className="flex items-center gap-2 text-sm text-slate-600 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedTerms.includes(term)}
+                      onChange={() => toggleTerm(term)}
+                      className="accent-indigo-600 w-4 h-4"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       </div>
