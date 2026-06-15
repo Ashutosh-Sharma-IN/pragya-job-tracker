@@ -29,6 +29,108 @@ const STATUS_BADGE: Record<string, string> = {
   skipped: "bg-slate-100 text-slate-500",
 };
 
+const REGIONS: { label: string; keywords: string[] }[] = [
+  {
+    label: "Yorkshire",
+    keywords: [
+      "yorkshire",
+      "leeds",
+      "sheffield",
+      "bradford",
+      "hull",
+      "york",
+      "halifax",
+      "huddersfield",
+      "wakefield",
+      "doncaster",
+      "rotherham",
+      "barnsley",
+    ],
+  },
+  {
+    label: "West Midlands",
+    keywords: [
+      "west midlands",
+      "birmingham",
+      "coventry",
+      "wolverhampton",
+      "walsall",
+      "dudley",
+      "sandwell",
+      "solihull",
+    ],
+  },
+  {
+    label: "East Midlands",
+    keywords: [
+      "east midlands",
+      "nottingham",
+      "leicester",
+      "derby",
+      "lincoln",
+      "mansfield",
+      "chesterfield",
+      "northampton",
+    ],
+  },
+  {
+    label: "Greater Manchester",
+    keywords: [
+      "manchester",
+      "salford",
+      "oldham",
+      "bolton",
+      "rochdale",
+      "wigan",
+      "stockport",
+      "trafford",
+      "tameside",
+    ],
+  },
+  {
+    label: "Lancashire",
+    keywords: [
+      "lancashire",
+      "preston",
+      "blackburn",
+      "burnley",
+      "blackpool",
+      "lancaster",
+      "chorley",
+    ],
+  },
+  {
+    label: "Merseyside",
+    keywords: [
+      "merseyside",
+      "liverpool",
+      "sefton",
+      "knowsley",
+      "wirral",
+      "st helens",
+    ],
+  },
+  {
+    label: "North East",
+    keywords: [
+      "north east",
+      "newcastle",
+      "sunderland",
+      "gateshead",
+      "middlesbrough",
+      "durham",
+      "hartlepool",
+      "stockton",
+      "darlington",
+    ],
+  },
+];
+
+function matchesRegion(location: string, regionKeywords: string[]): boolean {
+  const lower = location.toLowerCase();
+  return regionKeywords.some((k) => lower.includes(k));
+}
+
 // Roles Pragya is unlikely to qualify for (over-seniority)
 const OVERQUALIFIED_KEYWORDS = [
   "principal",
@@ -70,6 +172,7 @@ export default function JobsPage() {
   const [search, setSearch] = useState("");
   const [hideOverSeniority, setHideOverSeniority] = useState(true);
   const [sortBy, setSortBy] = useState<"deadline" | "recent">("deadline");
+  const [regionFilter, setRegionFilter] = useState<string>("all");
 
   useEffect(() => {
     fetch("/api/jobs")
@@ -96,6 +199,10 @@ export default function JobsPage() {
       if (sponsorFilter === "no" && j.visaSponsorship) return false;
       if (statusFilter !== "all" && j.status !== statusFilter) return false;
       if (hideOverSeniority && isOverSeniority(j.title)) return false;
+      if (regionFilter !== "all") {
+        const region = REGIONS.find((r) => r.label === regionFilter);
+        if (region && !matchesRegion(j.location, region.keywords)) return false;
+      }
       if (
         search &&
         !j.title.toLowerCase().includes(search.toLowerCase()) &&
@@ -162,6 +269,18 @@ export default function JobsPage() {
           {SECTORS.map((s) => (
             <option key={s} value={s}>
               {s}
+            </option>
+          ))}
+        </select>
+        <select
+          value={regionFilter}
+          onChange={(e) => setRegionFilter(e.target.value)}
+          className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        >
+          <option value="all">All Regions</option>
+          {REGIONS.map((r) => (
+            <option key={r.label} value={r.label}>
+              {r.label}
             </option>
           ))}
         </select>
