@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import {
   BarChart,
   Bar,
@@ -16,6 +16,7 @@ import {
   TrendingUp,
   CalendarClock,
   AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 
 const SECTOR_COLORS: Record<string, string> = {
@@ -57,17 +58,41 @@ export default function DashboardPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [apps, setApps] = useState<Application[]>([]);
   const [loading, setLoading] = useState(true);
+  const [scraping, setScraping] = useState(false);
+  const [scrapeResult, setScrapeResult] = useState<string | null>(null);
 
-  useEffect(() => {
-    Promise.all([
+  const loadData = useCallback(async () => {
+    const [j, a] = await Promise.all([
       fetch("/api/jobs").then((r) => r.json()),
       fetch("/api/applications").then((r) => r.json()),
-    ]).then(([j, a]) => {
-      setJobs(Array.isArray(j) ? j : []);
-      setApps(Array.isArray(a) ? a : []);
-      setLoading(false);
-    });
+    ]);
+    setJobs(Array.isArray(j) ? j : []);
+    setApps(Array.isArray(a) ? a : []);
   }, []);
+
+  useEffect(() => {
+    loadData().then(() => setLoading(false));
+  }, [loadData]);
+
+  const runScraper = async () => {
+    setScraping(true);
+    setScrapeResult(null);
+    try {
+      const res = await fetch("/api/scrape", { method: "POST" });
+      const data = await res.json();
+      if (data.ok) {
+        setScrapeResult(
+          `Done — ${data.added} new jobs added (${data.found} found across all sources)`,
+        );
+        await loadData();
+      } else {
+        setScrapeResult(`Error: ${data.error}`);
+      }
+    } catch {
+      setScrapeResult("Scraper failed — check Vercel logs");
+    }
+    setScraping(false);
+  };
 
   const totalJobs = jobs.length;
   const totalApplied = apps.length;
@@ -121,13 +146,32 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
-        <p className="text-slate-500 text-sm mt-1">
-          Pragya&apos;s UK job hunt — at a glance
-        </p>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
+          <p className="text-slate-500 text-sm mt-1">
+            Pragya&apos;s UK job hunt — at a glance
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            onClick={runScraper}
+            disabled={scraping}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+          >
+            <RefreshCw size={15} className={scraping ? "animate-spin" : ""} />
+            {scraping ? "Scraping jobs…" : "Scrape New Jobs"}
+          </button>
+          {scrapeResult && (
+            <p className="text-xs text-slate-500 max-w-xs text-right">
+              {scrapeResult}
+            </p>
+          )}
+        </div>
       </div>
 
+      {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <StatCard
           label="Jobs Found"
@@ -161,6 +205,7 @@ export default function DashboardPage() {
         />
       </div>
 
+      {/* Conversion funnel */}
       {totalApplied > 0 && (
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <h2 className="font-semibold text-slate-700 mb-4">
@@ -194,6 +239,7 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Charts */}
       <div className="grid md:grid-cols-2 gap-6">
         {weeklyArr.length > 0 && (
           <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -244,6 +290,7 @@ export default function DashboardPage() {
         )}
       </div>
 
+      {/* Overdue follow-ups */}
       {overdue.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-5">
           <div className="flex items-center gap-2 mb-3">
@@ -270,13 +317,13 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Empty state */}
       {totalJobs === 0 && (
         <div className="text-center py-16 text-slate-400">
           <Briefcase size={48} className="mx-auto mb-4 opacity-30" />
           <p className="text-lg font-medium">No jobs yet</p>
           <p className="text-sm mt-1">
-            Add jobs manually using the Add Job page, or wait for the weekly
-            scraper to run
+            Click &ldquo;Scrape New Jobs&rdquo; above or add one manually
           </p>
         </div>
       )}
